@@ -5,3 +5,4 @@ test.py
 supabase_fixes.sql
 setup_guide.md
 backend_requirements.txt
+.env
