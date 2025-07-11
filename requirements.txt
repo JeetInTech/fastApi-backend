@@ -1,21 +1,9 @@
-# Fixed requirements.txt for cloud deployment
-# Uses pre-compiled binaries to avoid build issues
-
-fastapi==0.104.1
-uvicorn[standard]==0.24.0
-supabase==2.0.0
-python-dotenv==1.0.0
-PyJWT==2.8.0
-
-# Use passlib without bcrypt to avoid Rust compilation
-passlib[argon2]==1.7.4
-
-# Alternative: Use python-bcrypt instead of bcrypt
-# python-bcrypt==3.2.2
-
-python-multipart==0.0.6
-pydantic[email]==2.4.2
-
-# Add these for better cloud deployment compatibility
-gunicorn==21.2.0
-httpx==0.25.0
+fastapi==0.115.0
+pydantic==2.9.2
+pyjwt==2.9.0
+passlib[bcrypt]==1.7.4
+python-dotenv==1.0.1
+supabase==2.9.1
+python-jose[cryptography]==3.3.0
+uvicorn==0.30.6
+gunicorn==23.0.0
