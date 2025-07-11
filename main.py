@@ -14,7 +14,8 @@ import traceback
 from supabase import create_client, Client
 
 load_dotenv()
-
+logging.basicConfig(level=logging.INFO)
+logger = logging.getLogger(__name__)
 # Supabase imports
 
 
@@ -68,6 +69,7 @@ validate_env_vars()
 # Environment variables
 SUPABASE_URL = os.getenv("SUPABASE_URL")
 SUPABASE_KEY = os.getenv("SUPABASE_KEY")
+SUPABASE_SERVICE_KEY = os.getenv("SUPABASE_SERVICE_KEY")
 JWT_SECRET = os.getenv("JWT_SECRET")
 JWT_ALGORITHM = "HS256"
 JWT_EXPIRATION_HOURS = 24
@@ -81,13 +83,23 @@ OAUTH_REDIRECT_URL = f"{FRONTEND_URL}/#auth/callback"
 # Initialize Supabase client
 supabase: Client = create_client(SUPABASE_URL, SUPABASE_KEY)
 
+# Add admin client for admin operations
+supabase_admin: Client = None
+if SUPABASE_SERVICE_KEY:
+    try:
+        supabase_admin = create_client(SUPABASE_URL, SUPABASE_SERVICE_KEY)
+        logger.info("✅ Supabase admin client initialized")
+    except Exception as e:
+        logger.warning(f"⚠️ Supabase admin client failed: {e}")
+else:
+    logger.warning("⚠️ SUPABASE_SERVICE_KEY not provided - using fallback")
+
 # Security
 security = HTTPBearer()
 pwd_context = CryptContext(schemes=["bcrypt"], deprecated="auto")
 
 # Logging
-logging.basicConfig(level=logging.INFO)
-logger = logging.getLogger(__name__)
+
 
 # API ROOT - Just return API info, no HTML
 @app.get("/")
@@ -234,10 +246,16 @@ async def get_current_user(credentials: HTTPAuthorizationCredentials = Depends(s
         
         user_profile = response.data[0]
         try:
-            auth_user = supabase.auth.admin.get_user_by_id(user_id)
-            if auth_user.user:
-                user_profile["email"] = auth_user.user.email
-        except:
+            if supabase_admin:
+                auth_user = supabase_admin.auth.admin.get_user_by_id(user_id)
+                if auth_user and auth_user.user:
+                    user_profile["email"] = auth_user.user.email
+                else:
+                    user_profile["email"] = payload.get("email", "")
+            else:
+                user_profile["email"] = payload.get("email", "")
+        except Exception as e:
+            logger.warning(f"⚠️ Admin call failed, using fallback: {e}")
             user_profile["email"] = payload.get("email", "")
             
         return user_profile
@@ -608,7 +626,7 @@ async def change_password(
                 detail="Current password is incorrect"
             )
 
-        update_response = supabase.auth.admin.update_user_by_id(
+        update_response = (supabase_admin or supabase).auth.admin.update_user_by_id(
             current_user["id"],
             {
                 "password": password_data.new_password
@@ -634,12 +652,14 @@ async def change_password(
 
 @app.post("/auth/logout")
 async def logout(current_user: dict = Depends(get_current_user)):
-    """Logout current user"""
+    """Logout current user - Fixed to handle admin API gracefully"""
     try:
+        logger.info(f"Logging out user: {current_user['id']}")
         supabase.auth.sign_out()
+        logger.info("✅ User logged out successfully")
         return {"message": "Successfully logged out"}
     except Exception as e:
-        logger.error(f"Logout error: {e}")
+        logger.warning(f"⚠️ Logout warning (non-critical): {e}")
         return {"message": "Logged out"}
 
 # Profile Routes
@@ -734,6 +754,7 @@ async def debug_supabase():
         return {
             "supabase_url": SUPABASE_URL[:50] + "..." if SUPABASE_URL else "MISSING",
             "supabase_key_length": len(SUPABASE_KEY) if SUPABASE_KEY else 0,
+            "supabase_service_key_length": len(SUPABASE_SERVICE_KEY) if SUPABASE_SERVICE_KEY else 0,
             "database_connection": "OK" if health_check else "ERROR",
             "auth_admin_access": auth_admin_status,
             "oauth_redirect_url": OAUTH_REDIRECT_URL,
@@ -800,7 +821,6 @@ async def startup_event():
 
 @app.on_event("shutdown")
 async def shutdown_event():
-    """Application shutdown"""
     logger.info("Jeet Enterprises API shutting down")
 
 if __name__ == "__main__":
