@@ -10,6 +10,9 @@ import jwt
 from passlib.context import CryptContext
 import logging
 from dotenv import load_dotenv
+from typing import Optional, List, Dict, Literal
+from datetime import datetime, timedelta
+import uuid
 import traceback
 from supabase import create_client, Client
 
@@ -23,7 +26,7 @@ logger = logging.getLogger(__name__)
 app = FastAPI(
     title="Jeet Enterprises Authentication API",
     description="Backend API for user authentication and subscription management",
-    version="1.0.0"
+    version="1.0.0",
 )
 
 # PRODUCTION: Remove static file serving - frontend will be on Netlify
@@ -39,10 +42,9 @@ app.add_middleware(
         # Your production frontend URL
         "https://jeetenterprises.netlify.app",
         "https://*.netlify.app",  # Allow Netlify preview deployments
-        
         # Keep localhost for development
-        "http://localhost:3000", 
-        "http://127.0.0.1:3000", 
+        "http://localhost:3000",
+        "http://127.0.0.1:3000",
         "http://localhost:8080",
         "http://127.0.0.1:8080",
         "http://localhost:5500",
@@ -55,13 +57,15 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
+
 # Environment variables validation
 def validate_env_vars():
     required_vars = ["SUPABASE_URL", "SUPABASE_KEY", "JWT_SECRET"]
     missing_vars = [var for var in required_vars if not os.getenv(var)]
-    
+
     if missing_vars:
         raise ValueError(f"Missing required environment variables: {missing_vars}")
+
 
 # Validate environment on startup
 validate_env_vars()
@@ -100,6 +104,40 @@ pwd_context = CryptContext(schemes=["bcrypt"], deprecated="auto")
 
 # Logging
 
+class PurchaseItem(BaseModel):
+    name: str
+    description: str
+    price: float
+    quantity: int
+    product_details: Optional[Dict] = None
+    subscription_details: Optional[Dict] = None
+
+class Purchase(BaseModel):
+    id: str
+    date: datetime
+    type: Literal["product", "subscription"]
+    items: List[PurchaseItem]
+    total: float
+    status: str
+    payment_method: str
+    user_id: Optional[str] = None
+
+class PurchaseResponse(BaseModel):
+    purchases: List[Purchase]
+
+class CreatePurchase(BaseModel):
+    product_id: str
+    product_name: str
+    description: str
+    price: float
+    quantity: int = 1
+    type: Literal["product", "subscription"] = "product"
+    category: Optional[str] = None
+    payment_method: str = "card"
+    subscription_plan: Optional[str] = None  # "plus" or "pro"
+    billing_cycle: Optional[str] = None  # "monthly" or "annual"
+
+
 
 # API ROOT - Just return API info, no HTML
 @app.get("/")
@@ -114,14 +152,15 @@ async def api_root():
         "endpoints": {
             "health": "/health",
             "auth_login": "/auth/login",
-            "auth_signup": "/auth/signup", 
+            "auth_signup": "/auth/signup",
             "oauth_google": "/auth/oauth/google",
             "oauth_github": "/auth/oauth/github",
             "oauth_exchange": "/auth/oauth/exchange",
             "profile": "/profile/",
-            "debug": "/debug/supabase"
-        }
+            "debug": "/debug/supabase",
+        },
     }
+
 
 # Pydantic Models
 class UserSignup(BaseModel):
@@ -131,51 +170,58 @@ class UserSignup(BaseModel):
     phone: str
     newsletter_subscription: Optional[bool] = False
 
-    @validator('password')
+    @validator("password")
     def validate_password(cls, v):
         if len(v) < 8:
-            raise ValueError('Password must be at least 8 characters long')
+            raise ValueError("Password must be at least 8 characters long")
         return v
 
-    @validator('full_name')
+    @validator("full_name")
     def validate_full_name(cls, v):
         if len(v.strip()) < 2:
-            raise ValueError('Full name must be at least 2 characters long')
+            raise ValueError("Full name must be at least 2 characters long")
         return v.strip()
+
 
 class UserLogin(BaseModel):
     email: EmailStr
     password: str
 
+
 class PasswordReset(BaseModel):
     email: EmailStr
+
 
 class PasswordChange(BaseModel):
     current_password: str
     new_password: str
 
-    @validator('new_password')
+    @validator("new_password")
     def validate_new_password(cls, v):
         if len(v) < 8:
-            raise ValueError('New password must be at least 8 characters long')
+            raise ValueError("New password must be at least 8 characters long")
         return v
+
 
 class ProfileUpdate(BaseModel):
     full_name: Optional[str] = None
     phone: Optional[str] = None
 
+
 class SubscriptionUpdate(BaseModel):
     subscription_type: str
 
-    @validator('subscription_type')
+    @validator("subscription_type")
     def validate_subscription(cls, v):
-        if v not in ['free', 'premium', 'pro']:
-            raise ValueError('Invalid subscription type')
+        if v not in ["free", "premium", "pro"]:
+            raise ValueError("Invalid subscription type")
         return v
+
 
 class OAuthTokenExchange(BaseModel):
     access_token: str
     refresh_token: str
+
 
 class UserResponse(BaseModel):
     id: str
@@ -187,21 +233,26 @@ class UserResponse(BaseModel):
     avatar_url: Optional[str] = None
     created_at: datetime
 
+
 class TokenResponse(BaseModel):
     access_token: str
     token_type: str
     user: UserResponse
 
+
 class OAuthUrlResponse(BaseModel):
     url: str
     provider: str
+
 
 # Helper Functions
 def verify_password(plain_password: str, hashed_password: str) -> bool:
     return pwd_context.verify(plain_password, hashed_password)
 
+
 def get_password_hash(password: str) -> str:
     return pwd_context.hash(password)
+
 
 def create_access_token(data: dict) -> str:
     to_encode = data.copy()
@@ -210,40 +261,40 @@ def create_access_token(data: dict) -> str:
     encoded_jwt = jwt.encode(to_encode, JWT_SECRET, algorithm=JWT_ALGORITHM)
     return encoded_jwt
 
+
 def verify_token(token: str) -> dict:
     try:
         payload = jwt.decode(token, JWT_SECRET, algorithms=[JWT_ALGORITHM])
         return payload
     except jwt.ExpiredSignatureError:
         raise HTTPException(
-            status_code=status.HTTP_401_UNAUTHORIZED,
-            detail="Token has expired"
+            status_code=status.HTTP_401_UNAUTHORIZED, detail="Token has expired"
         )
     except jwt.JWTError:
         raise HTTPException(
-            status_code=status.HTTP_401_UNAUTHORIZED,
-            detail="Invalid token"
+            status_code=status.HTTP_401_UNAUTHORIZED, detail="Invalid token"
         )
 
-async def get_current_user(credentials: HTTPAuthorizationCredentials = Depends(security)):
+
+async def get_current_user(
+    credentials: HTTPAuthorizationCredentials = Depends(security),
+):
     token = credentials.credentials
     payload = verify_token(token)
     user_id = payload.get("sub")
-    
+
     if user_id is None:
         raise HTTPException(
-            status_code=status.HTTP_401_UNAUTHORIZED,
-            detail="Invalid token"
+            status_code=status.HTTP_401_UNAUTHORIZED, detail="Invalid token"
         )
-    
+
     try:
-        response = supabase.table('profiles').select('*').eq('id', user_id).execute()
+        response = supabase.table("profiles").select("*").eq("id", user_id).execute()
         if not response.data:
             raise HTTPException(
-                status_code=status.HTTP_404_NOT_FOUND,
-                detail="User not found"
+                status_code=status.HTTP_404_NOT_FOUND, detail="User not found"
             )
-        
+
         user_profile = response.data[0]
         try:
             if supabase_admin:
@@ -257,51 +308,59 @@ async def get_current_user(credentials: HTTPAuthorizationCredentials = Depends(s
         except Exception as e:
             logger.warning(f"⚠️ Admin call failed, using fallback: {e}")
             user_profile["email"] = payload.get("email", "")
-            
+
         return user_profile
     except Exception as e:
         logger.error(f"Error fetching user: {e}")
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            detail="Error fetching user data"
+            detail="Error fetching user data",
         )
+
 
 # Authentication Routes
 @app.post("/auth/signup", response_model=dict)
 async def signup(user_data: UserSignup):
     """Create a new user account with email and password"""
     try:
-        existing_user = supabase.table('profiles').select('id').eq('email', user_data.email).execute()
+        existing_user = (
+            supabase.table("profiles")
+            .select("id")
+            .eq("email", user_data.email)
+            .execute()
+        )
         if existing_user.data:
             raise HTTPException(
                 status_code=status.HTTP_400_BAD_REQUEST,
-                detail="Email already registered"
+                detail="Email already registered",
             )
 
-        auth_response = supabase.auth.sign_up({
-            "email": user_data.email,
-            "password": user_data.password,
-            "options": {
-                "data": {
-                    "full_name": user_data.full_name,
-                    "phone": user_data.phone,
-                    "newsletter_subscription": user_data.newsletter_subscription
-                }
+        auth_response = supabase.auth.sign_up(
+            {
+                "email": user_data.email,
+                "password": user_data.password,
+                "options": {
+                    "data": {
+                        "full_name": user_data.full_name,
+                        "phone": user_data.phone,
+                        "newsletter_subscription": user_data.newsletter_subscription,
+                    }
+                },
             }
-        })
-        
+        )
+
         if not auth_response.user:
             raise HTTPException(
                 status_code=status.HTTP_400_BAD_REQUEST,
-                detail="Failed to create user account"
+                detail="Failed to create user account",
             )
-        
+
         return {
             "message": "User created successfully. Please check your email for verification.",
             "user_id": auth_response.user.id,
-            "email_confirmed": auth_response.user.email_confirmed_at is not None
+            "email_confirmed": auth_response.user.email_confirmed_at is not None,
         }
-        
+
     except HTTPException:
         raise
     except Exception as e:
@@ -309,50 +368,54 @@ async def signup(user_data: UserSignup):
         if "already registered" in str(e).lower() or "duplicate" in str(e).lower():
             raise HTTPException(
                 status_code=status.HTTP_400_BAD_REQUEST,
-                detail="Email already registered"
+                detail="Email already registered",
             )
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            detail="Internal server error during signup"
+            detail="Internal server error during signup",
         )
+
 
 @app.post("/auth/login", response_model=TokenResponse)
 async def login(user_credentials: UserLogin):
     """Login with email and password"""
     try:
-        auth_response = supabase.auth.sign_in_with_password({
-            "email": user_credentials.email,
-            "password": user_credentials.password
-        })
-        
+        auth_response = supabase.auth.sign_in_with_password(
+            {"email": user_credentials.email, "password": user_credentials.password}
+        )
+
         if not auth_response.user:
             raise HTTPException(
                 status_code=status.HTTP_401_UNAUTHORIZED,
-                detail="Invalid email or password"
+                detail="Invalid email or password",
             )
-        
+
         user_id = auth_response.user.id
-        
-        profile_response = supabase.table('profiles').select('*').eq('id', user_id).execute()
-        
+
+        profile_response = (
+            supabase.table("profiles").select("*").eq("id", user_id).execute()
+        )
+
         if not profile_response.data:
             profile_data = {
                 "id": user_id,
                 "full_name": auth_response.user.user_metadata.get("full_name", ""),
                 "phone": auth_response.user.user_metadata.get("phone", ""),
-                "subscription": "free"
+                "subscription": "free",
             }
-            profile_response = supabase.table('profiles').insert(profile_data).execute()
+            profile_response = supabase.table("profiles").insert(profile_data).execute()
             if not profile_response.data:
                 raise HTTPException(
                     status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-                    detail="Failed to create user profile"
+                    detail="Failed to create user profile",
                 )
-        
+
         profile = profile_response.data[0]
-        
-        access_token = create_access_token(data={"sub": user_id, "email": user_credentials.email})
-        
+
+        access_token = create_access_token(
+            data={"sub": user_id, "email": user_credentials.email}
+        )
+
         user_response = UserResponse(
             id=profile["id"],
             email=auth_response.user.email,
@@ -361,23 +424,21 @@ async def login(user_credentials: UserLogin):
             subscription=profile["subscription"],
             provider=profile.get("provider"),
             avatar_url=profile.get("avatar_url"),
-            created_at=profile["created_at"]
+            created_at=profile["created_at"],
         )
-        
+
         return TokenResponse(
-            access_token=access_token,
-            token_type="bearer",
-            user=user_response
+            access_token=access_token, token_type="bearer", user=user_response
         )
-        
+
     except HTTPException:
         raise
     except Exception as e:
         logger.error(f"Login error: {e}")
         raise HTTPException(
-            status_code=status.HTTP_401_UNAUTHORIZED,
-            detail="Invalid email or password"
+            status_code=status.HTTP_401_UNAUTHORIZED, detail="Invalid email or password"
         )
+
 
 # OAuth Routes
 @app.get("/auth/oauth/google", response_model=OAuthUrlResponse)
@@ -386,16 +447,14 @@ async def get_google_oauth():
     try:
         oauth_url = f"{SUPABASE_URL}/auth/v1/authorize?provider=google&redirect_to={OAUTH_REDIRECT_URL}"
         logger.info(f"Generated Google OAuth URL: {oauth_url}")
-        return OAuthUrlResponse(
-            url=oauth_url,
-            provider="google"
-        )
+        return OAuthUrlResponse(url=oauth_url, provider="google")
     except Exception as e:
         logger.error(f"Google OAuth URL error: {e}")
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            detail="Failed to generate Google OAuth URL"
+            detail="Failed to generate Google OAuth URL",
         )
+
 
 @app.get("/auth/oauth/github", response_model=OAuthUrlResponse)
 async def get_github_oauth():
@@ -403,16 +462,14 @@ async def get_github_oauth():
     try:
         oauth_url = f"{SUPABASE_URL}/auth/v1/authorize?provider=github&redirect_to={OAUTH_REDIRECT_URL}"
         logger.info(f"Generated GitHub OAuth URL: {oauth_url}")
-        return OAuthUrlResponse(
-            url=oauth_url,
-            provider="github"
-        )
+        return OAuthUrlResponse(url=oauth_url, provider="github")
     except Exception as e:
         logger.error(f"GitHub OAuth URL error: {e}")
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            detail="Failed to generate GitHub OAuth URL"
+            detail="Failed to generate GitHub OAuth URL",
         )
+
 
 @app.get("/auth/oauth/linkedin", response_model=OAuthUrlResponse)
 async def get_linkedin_oauth():
@@ -420,48 +477,47 @@ async def get_linkedin_oauth():
     try:
         oauth_url = f"{SUPABASE_URL}/auth/v1/authorize?provider=linkedin_oidc&redirect_to={OAUTH_REDIRECT_URL}"
         logger.info(f"Generated LinkedIn OAuth URL: {oauth_url}")
-        return OAuthUrlResponse(
-            url=oauth_url,
-            provider="linkedin"
-        )
+        return OAuthUrlResponse(url=oauth_url, provider="linkedin")
     except Exception as e:
         logger.error(f"LinkedIn OAuth URL error: {e}")
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            detail="Failed to generate LinkedIn OAuth URL"
+            detail="Failed to generate LinkedIn OAuth URL",
         )
+
 
 @app.post("/auth/oauth/exchange", response_model=TokenResponse)
 async def exchange_oauth_tokens(token_data: OAuthTokenExchange):
     """Exchange OAuth tokens received from Supabase callback for user session"""
     logger.info("🔄 Starting OAuth token exchange")
-    logger.info(f"Received tokens - Access: {len(token_data.access_token)} chars, Refresh: {len(token_data.refresh_token)} chars")
-    
+    logger.info(
+        f"Received tokens - Access: {len(token_data.access_token)} chars, Refresh: {len(token_data.refresh_token)} chars"
+    )
+
     try:
         if not token_data.access_token or len(token_data.access_token) < 10:
             logger.error("Invalid access token format")
             raise HTTPException(
                 status_code=status.HTTP_400_BAD_REQUEST,
-                detail="Invalid access token format"
+                detail="Invalid access token format",
             )
-            
+
         if not token_data.refresh_token or len(token_data.refresh_token) < 10:
             logger.error("Invalid refresh token format")
             raise HTTPException(
                 status_code=status.HTTP_400_BAD_REQUEST,
-                detail="Invalid refresh token format"
+                detail="Invalid refresh token format",
             )
 
         logger.info("✅ Token format validation passed")
-        
+
         try:
             logger.info("Setting Supabase session with tokens...")
             auth_response = supabase.auth.set_session(
-                token_data.access_token, 
-                token_data.refresh_token
+                token_data.access_token, token_data.refresh_token
             )
             logger.info(f"Supabase session response: {type(auth_response)}")
-            
+
         except Exception as session_error:
             logger.error(f"Supabase session error: {session_error}")
             try:
@@ -473,87 +529,91 @@ async def exchange_oauth_tokens(token_data: OAuthTokenExchange):
                 logger.error(f"Alternative session method failed: {alt_error}")
                 raise HTTPException(
                     status_code=status.HTTP_401_UNAUTHORIZED,
-                    detail=f"Failed to validate OAuth tokens: {str(session_error)}"
+                    detail=f"Failed to validate OAuth tokens: {str(session_error)}",
                 )
-        
+
         if not auth_response.user:
             logger.error("No user found in auth response")
             raise HTTPException(
                 status_code=status.HTTP_401_UNAUTHORIZED,
-                detail="Invalid OAuth tokens - no user found"
+                detail="Invalid OAuth tokens - no user found",
             )
-        
+
         user_id = auth_response.user.id
         user_email = auth_response.user.email
         logger.info(f"✅ User authenticated: {user_id} ({user_email})")
-        
+
         logger.info("Fetching user profile...")
-        profile_response = supabase.table('profiles').select('*').eq('id', user_id).execute()
-        
+        profile_response = (
+            supabase.table("profiles").select("*").eq("id", user_id).execute()
+        )
+
         if not profile_response.data:
             logger.info("Creating new user profile...")
             user_metadata = auth_response.user.user_metadata or {}
-            
+
             full_name = (
-                user_metadata.get("full_name") or 
-                user_metadata.get("name") or 
-                user_metadata.get("display_name") or
-                f"{user_metadata.get('given_name', '')} {user_metadata.get('family_name', '')}".strip() or
-                user_email.split('@')[0]
+                user_metadata.get("full_name")
+                or user_metadata.get("name")
+                or user_metadata.get("display_name")
+                or f"{user_metadata.get('given_name', '')} {user_metadata.get('family_name', '')}".strip()
+                or user_email.split("@")[0]
             )
-            
+
             avatar_url = (
-                user_metadata.get("avatar_url") or 
-                user_metadata.get("picture") or
-                user_metadata.get("photo") or
-                None
+                user_metadata.get("avatar_url")
+                or user_metadata.get("picture")
+                or user_metadata.get("photo")
+                or None
             )
-            
+
             profile_data = {
                 "id": user_id,
                 "full_name": full_name,
                 "phone": user_metadata.get("phone", ""),
                 "subscription": "free",
                 "provider": user_metadata.get("provider", "oauth"),
-                "avatar_url": avatar_url
+                "avatar_url": avatar_url,
             }
-            
+
             logger.info(f"Creating profile with data: {profile_data}")
-            
+
             try:
-                profile_response = supabase.table('profiles').insert(profile_data).execute()
+                profile_response = (
+                    supabase.table("profiles").insert(profile_data).execute()
+                )
                 logger.info("✅ Profile created successfully")
             except Exception as profile_error:
                 logger.error(f"Profile creation error: {profile_error}")
                 profile_data = {
                     "id": user_id,
                     "full_name": full_name,
-                    "subscription": "free"
+                    "subscription": "free",
                 }
                 try:
-                    profile_response = supabase.table('profiles').insert(profile_data).execute()
+                    profile_response = (
+                        supabase.table("profiles").insert(profile_data).execute()
+                    )
                     logger.info("✅ Minimal profile created")
                 except Exception as minimal_error:
                     logger.error(f"Minimal profile creation failed: {minimal_error}")
                     profile_response.data = [profile_data]
-        
+
         if not profile_response.data:
             logger.error("Failed to get or create profile")
             raise HTTPException(
                 status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-                detail="Failed to create user profile"
+                detail="Failed to create user profile",
             )
-        
+
         profile = profile_response.data[0]
         logger.info(f"✅ Profile retrieved: {profile}")
-        
-        jwt_token = create_access_token(data={
-            "sub": user_id, 
-            "email": user_email,
-            "provider": "oauth"
-        })
+
+        jwt_token = create_access_token(
+            data={"sub": user_id, "email": user_email, "provider": "oauth"}
+        )
         logger.info("✅ JWT token created")
-        
+
         user_response = UserResponse(
             id=profile["id"],
             email=user_email,
@@ -562,93 +622,89 @@ async def exchange_oauth_tokens(token_data: OAuthTokenExchange):
             subscription=profile.get("subscription", "free"),
             provider=profile.get("provider"),
             avatar_url=profile.get("avatar_url"),
-            created_at=profile.get("created_at", datetime.utcnow())
+            created_at=profile.get("created_at", datetime.utcnow()),
         )
-        
+
         token_response = TokenResponse(
-            access_token=jwt_token,
-            token_type="bearer",
-            user=user_response
+            access_token=jwt_token, token_type="bearer", user=user_response
         )
-        
+
         logger.info("✅ OAuth token exchange completed successfully")
         return token_response
-        
+
     except HTTPException:
         raise
     except Exception as e:
         logger.error(f"❌ OAuth token exchange error: {e}")
         logger.error(f"Error type: {type(e)}")
         logger.error(f"Traceback: {traceback.format_exc()}")
-        
+
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            detail=f"Failed to exchange OAuth tokens: {str(e)}"
+            detail=f"Failed to exchange OAuth tokens: {str(e)}",
         )
+
 
 @app.post("/auth/reset-password")
 async def reset_password(reset_data: PasswordReset):
     """Send password reset email"""
     try:
         response = supabase.auth.reset_password_email(
-            reset_data.email,
-            {
-                "redirect_to": f"{FRONTEND_URL}/reset-password"
-            }
+            reset_data.email, {"redirect_to": f"{FRONTEND_URL}/reset-password"}
         )
-        
+
         return {"message": "Password reset email sent successfully"}
-        
+
     except Exception as e:
         logger.error(f"Password reset error: {e}")
         return {"message": "If the email exists, a reset link will be sent"}
 
+
 @app.post("/auth/change-password")
 async def change_password(
-    password_data: PasswordChange,
-    current_user: dict = Depends(get_current_user)
+    password_data: PasswordChange, current_user: dict = Depends(get_current_user)
 ):
     """Change user password"""
     try:
         try:
-            auth_response = supabase.auth.sign_in_with_password({
-                "email": current_user.get("email"),
-                "password": password_data.current_password
-            })
+            auth_response = supabase.auth.sign_in_with_password(
+                {
+                    "email": current_user.get("email"),
+                    "password": password_data.current_password,
+                }
+            )
             if not auth_response.user:
                 raise HTTPException(
                     status_code=status.HTTP_400_BAD_REQUEST,
-                    detail="Current password is incorrect"
+                    detail="Current password is incorrect",
                 )
         except Exception:
             raise HTTPException(
                 status_code=status.HTTP_400_BAD_REQUEST,
-                detail="Current password is incorrect"
+                detail="Current password is incorrect",
             )
 
         update_response = (supabase_admin or supabase).auth.admin.update_user_by_id(
-            current_user["id"],
-            {
-                "password": password_data.new_password
-            }
+            current_user["id"], {"password": password_data.new_password}
         )
-        
+
         if not update_response.user:
             raise HTTPException(
                 status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-                detail="Failed to update password"
+                detail="Failed to update password",
             )
-        
+
         return {"message": "Password updated successfully"}
-        
+
     except HTTPException:
         raise
     except Exception as e:
         logger.error(f"Password change error: {e}")
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            detail="Failed to change password"
+            detail="Failed to change password",
         )
+
 
 @app.post("/auth/logout")
 async def logout(current_user: dict = Depends(get_current_user)):
@@ -661,6 +717,7 @@ async def logout(current_user: dict = Depends(get_current_user)):
     except Exception as e:
         logger.warning(f"⚠️ Logout warning (non-critical): {e}")
         return {"message": "Logged out"}
+
 
 # Profile Routes
 @app.get("/profile/", response_model=UserResponse)
@@ -675,22 +732,307 @@ async def get_profile(current_user: dict = Depends(get_current_user)):
             subscription=current_user["subscription"],
             provider=current_user.get("provider"),
             avatar_url=current_user.get("avatar_url"),
-            created_at=current_user["created_at"]
+            created_at=current_user["created_at"],
         )
-        
+
         return user_response
-        
+
     except Exception as e:
         logger.error(f"Get profile error: {e}")
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            detail="Failed to fetch user profile"
+            detail="Failed to fetch user profile",
         )
+
+
+# PURCHASE HISTORY
+# Purchase Routes
+@app.get("/api/purchases/history", response_model=PurchaseResponse)
+async def get_purchase_history(current_user: dict = Depends(get_current_user)):
+    """Get user's purchase history including products and subscriptions"""
+    try:
+        # Fetch purchases from the database
+        purchases_response = (
+            supabase.table("purchases")
+            .select("*")
+            .eq("user_id", current_user["id"])
+            .order("created_at", desc=True)
+            .execute()
+        )
+
+        if not purchases_response.data:
+            return PurchaseResponse(purchases=[])
+
+        purchases = []
+        for purchase_data in purchases_response.data:
+            # Parse items from JSON if stored as JSON
+            items = []
+            if purchase_data.get("items"):
+                # If items is stored as JSON string, parse it
+                import json
+
+                try:
+                    items_data = (
+                        json.loads(purchase_data["items"])
+                        if isinstance(purchase_data["items"], str)
+                        else purchase_data["items"]
+                    )
+                    for item in items_data:
+                        items.append(PurchaseItem(**item))
+                except:
+                    # Fallback for single item
+                    items.append(
+                        PurchaseItem(
+                            name=purchase_data.get("product_name", "Unknown Product"),
+                            description=purchase_data.get("description", ""),
+                            price=purchase_data.get("price", 0),
+                            quantity=purchase_data.get("quantity", 1),
+                            product_details=purchase_data.get("product_details"),
+                            subscription_details=purchase_data.get(
+                                "subscription_details"
+                            ),
+                        )
+                    )
+
+            purchase = Purchase(
+                id=purchase_data["id"],
+                date=purchase_data["created_at"],
+                type=purchase_data.get("type", "product"),
+                items=items,
+                total=purchase_data.get("total", 0),
+                status=purchase_data.get("status", "completed"),
+                payment_method=purchase_data.get("payment_method", "card"),
+            )
+            purchases.append(purchase)
+
+        return PurchaseResponse(purchases=purchases)
+
+    except Exception as e:
+        logger.error(f"Error fetching purchase history: {e}")
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail="Failed to fetch purchase history",
+        )
+
+
+@app.post("/api/purchases/create")
+async def create_purchase(
+    purchase_data: CreatePurchase, current_user: dict = Depends(get_current_user)
+):
+    """Create a new purchase record after successful payment"""
+    try:
+        purchase_id = f"{'SUB' if purchase_data.type == 'subscription' else 'PRO'}{str(uuid.uuid4())[:8].upper()}"
+
+        # Prepare item details
+        item_details = {
+            "name": purchase_data.product_name,
+            "description": purchase_data.description,
+            "price": purchase_data.price,
+            "quantity": purchase_data.quantity,
+        }
+
+        # Add product or subscription specific details
+        if purchase_data.type == "subscription":
+            # Calculate subscription dates
+            start_date = datetime.utcnow()
+            if purchase_data.billing_cycle == "monthly":
+                end_date = start_date + timedelta(days=30)
+            else:  # annual
+                end_date = start_date + timedelta(days=365)
+
+            item_details["subscription_details"] = {
+                "plan": purchase_data.subscription_plan,
+                "billing_cycle": purchase_data.billing_cycle,
+                "start_date": start_date.isoformat(),
+                "end_date": end_date.isoformat(),
+                "auto_renew": True,
+                "status": "active",
+            }
+
+            # Update user's subscription status
+            supabase.table("profiles").update(
+                {"subscription": purchase_data.subscription_plan}
+            ).eq("id", current_user["id"]).execute()
+
+        else:  # product
+            item_details["product_details"] = {
+                "category": purchase_data.category or "General",
+                "license": "lifetime",
+                "download_link": f"/api/downloads/{purchase_id}",  # You'll need to implement download endpoint
+            }
+
+        # Create purchase record
+        purchase_record = {
+            "id": purchase_id,
+            "user_id": current_user["id"],
+            "type": purchase_data.type,
+            "items": json.dumps([item_details]),  # Store as JSON string
+            "product_name": purchase_data.product_name,  # For backward compatibility
+            "description": purchase_data.description,
+            "price": purchase_data.price,
+            "quantity": purchase_data.quantity,
+            "total": purchase_data.price * purchase_data.quantity,
+            "status": "active" if purchase_data.type == "subscription" else "completed",
+            "payment_method": purchase_data.payment_method,
+            "product_details": item_details.get("product_details"),
+            "subscription_details": item_details.get("subscription_details"),
+        }
+
+        response = supabase.table("purchases").insert(purchase_record).execute()
+
+        if not response.data:
+            raise HTTPException(
+                status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+                detail="Failed to create purchase record",
+            )
+
+        return {
+            "success": True,
+            "purchase_id": purchase_id,
+            "message": f"{'Subscription' if purchase_data.type == 'subscription' else 'Purchase'} successful",
+        }
+
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"Error creating purchase: {e}")
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail="Failed to create purchase record",
+        )
+
+
+@app.get("/api/purchases/{purchase_id}")
+async def get_purchase_details(
+    purchase_id: str, current_user: dict = Depends(get_current_user)
+):
+    """Get details of a specific purchase"""
+    try:
+        response = (
+            supabase.table("purchases")
+            .select("*")
+            .eq("id", purchase_id)
+            .eq("user_id", current_user["id"])
+            .execute()
+        )
+
+        if not response.data:
+            raise HTTPException(
+                status_code=status.HTTP_404_NOT_FOUND, detail="Purchase not found"
+            )
+
+        return response.data[0]
+
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"Error fetching purchase details: {e}")
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail="Failed to fetch purchase details",
+        )
+
+
+@app.post("/api/subscriptions/{purchase_id}/cancel")
+async def cancel_subscription(
+    purchase_id: str, current_user: dict = Depends(get_current_user)
+):
+    """Cancel auto-renewal for a subscription"""
+    try:
+        # Verify ownership
+        purchase_response = (
+            supabase.table("purchases")
+            .select("*")
+            .eq("id", purchase_id)
+            .eq("user_id", current_user["id"])
+            .execute()
+        )
+
+        if not purchase_response.data:
+            raise HTTPException(
+                status_code=status.HTTP_404_NOT_FOUND, detail="Subscription not found"
+            )
+
+        purchase = purchase_response.data[0]
+        if purchase["type"] != "subscription":
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail="This is not a subscription",
+            )
+
+        # Update subscription details
+        subscription_details = purchase.get("subscription_details", {})
+        subscription_details["auto_renew"] = False
+
+        update_response = (
+            supabase.table("purchases")
+            .update({"subscription_details": subscription_details})
+            .eq("id", purchase_id)
+            .execute()
+        )
+
+        if not update_response.data:
+            raise HTTPException(
+                status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+                detail="Failed to cancel auto-renewal",
+            )
+
+        return {"message": "Auto-renewal cancelled successfully"}
+
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"Error cancelling subscription: {e}")
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail="Failed to cancel subscription",
+        )
+
+
+# Add this to check and update expired subscriptions
+@app.on_event("startup")
+async def check_expired_subscriptions():
+    """Check and update expired subscriptions on startup"""
+    try:
+        # Get all active subscriptions
+        active_subs = (
+            supabase.table("purchases")
+            .select("*")
+            .eq("type", "subscription")
+            .eq("status", "active")
+            .execute()
+        )
+
+        if active_subs.data:
+            for sub in active_subs.data:
+                subscription_details = sub.get("subscription_details", {})
+                end_date = datetime.fromisoformat(
+                    subscription_details.get("end_date", "")
+                )
+
+                # Check if expired
+                if end_date < datetime.utcnow():
+                    # Update status to expired
+                    supabase.table("purchases").update({"status": "expired"}).eq(
+                        "id", sub["id"]
+                    ).execute()
+
+                    # Update user's subscription to free
+                    supabase.table("profiles").update({"subscription": "free"}).eq(
+                        "id", sub["user_id"]
+                    ).execute()
+
+                    logger.info(
+                        f"Expired subscription {sub['id']} for user {sub['user_id']}"
+                    )
+
+    except Exception as e:
+        logger.error(f"Error checking expired subscriptions: {e}")
+
 
 @app.put("/profile/update", response_model=UserResponse)
 async def update_profile(
-    profile_data: ProfileUpdate,
-    current_user: dict = Depends(get_current_user)
+    profile_data: ProfileUpdate, current_user: dict = Depends(get_current_user)
 ):
     """Update user profile"""
     try:
@@ -699,23 +1041,28 @@ async def update_profile(
             update_data["full_name"] = profile_data.full_name
         if profile_data.phone is not None:
             update_data["phone"] = profile_data.phone
-        
+
         if not update_data:
             raise HTTPException(
                 status_code=status.HTTP_400_BAD_REQUEST,
-                detail="No data provided for update"
+                detail="No data provided for update",
             )
-        
-        response = supabase.table('profiles').update(update_data).eq('id', current_user["id"]).execute()
-        
+
+        response = (
+            supabase.table("profiles")
+            .update(update_data)
+            .eq("id", current_user["id"])
+            .execute()
+        )
+
         if not response.data:
             raise HTTPException(
                 status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-                detail="Failed to update profile"
+                detail="Failed to update profile",
             )
-        
+
         updated_profile = response.data[0]
-        
+
         user_response = UserResponse(
             id=updated_profile["id"],
             email=current_user.get("email", ""),
@@ -724,66 +1071,72 @@ async def update_profile(
             subscription=updated_profile["subscription"],
             provider=updated_profile.get("provider"),
             avatar_url=updated_profile.get("avatar_url"),
-            created_at=updated_profile["created_at"]
+            created_at=updated_profile["created_at"],
         )
-        
+
         return user_response
-        
+
     except HTTPException:
         raise
     except Exception as e:
         logger.error(f"Update profile error: {e}")
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            detail="Failed to update profile"
+            detail="Failed to update profile",
         )
+
 
 # Debug endpoints
 @app.get("/debug/supabase")
 async def debug_supabase():
     """Debug Supabase connection and configuration"""
     try:
-        health_check = supabase.table('profiles').select('count').limit(1).execute()
-        
+        health_check = supabase.table("profiles").select("count").limit(1).execute()
+
         try:
             users = supabase.auth.admin.list_users(page=1, per_page=1)
             auth_admin_status = "OK"
         except Exception as e:
             auth_admin_status = f"ERROR: {str(e)}"
-        
+
         return {
             "supabase_url": SUPABASE_URL[:50] + "..." if SUPABASE_URL else "MISSING",
             "supabase_key_length": len(SUPABASE_KEY) if SUPABASE_KEY else 0,
-            "supabase_service_key_length": len(SUPABASE_SERVICE_KEY) if SUPABASE_SERVICE_KEY else 0,
+            "supabase_service_key_length": len(SUPABASE_SERVICE_KEY)
+            if SUPABASE_SERVICE_KEY
+            else 0,
             "database_connection": "OK" if health_check else "ERROR",
             "auth_admin_access": auth_admin_status,
             "oauth_redirect_url": OAUTH_REDIRECT_URL,
-            "profiles_table_accessible": bool(health_check.data) if health_check else False,
+            "profiles_table_accessible": bool(health_check.data)
+            if health_check
+            else False,
             "environment": {
                 "frontend_url": FRONTEND_URL,
-                "jwt_secret_set": bool(JWT_SECRET)
-            }
+                "jwt_secret_set": bool(JWT_SECRET),
+            },
         }
     except Exception as e:
         return {
             "error": str(e),
             "status": "FAILED",
-            "traceback": traceback.format_exc()
+            "traceback": traceback.format_exc(),
         }
+
 
 # Health check endpoint
 @app.get("/health")
 async def health_check():
     """Health check endpoint"""
     try:
-        response = supabase.table('profiles').select('count').limit(1).execute()
+        response = supabase.table("profiles").select("count").limit(1).execute()
         return {
-            "status": "healthy", 
+            "status": "healthy",
             "timestamp": datetime.utcnow(),
             "database": "connected",
             "version": "1.0.0",
             "oauth_redirect_url": OAUTH_REDIRECT_URL,
-            "frontend_url": FRONTEND_URL
+            "frontend_url": FRONTEND_URL,
         }
     except Exception as e:
         logger.error(f"Health check failed: {e}")
@@ -791,24 +1144,21 @@ async def health_check():
             "status": "unhealthy",
             "timestamp": datetime.utcnow(),
             "database": "disconnected",
-            "error": str(e)
+            "error": str(e),
         }
+
 
 # Error handlers
 @app.exception_handler(404)
 async def not_found_handler(request, exc):
-    return JSONResponse(
-        status_code=404,
-        content={"detail": "Endpoint not found"}
-    )
+    return JSONResponse(status_code=404, content={"detail": "Endpoint not found"})
+
 
 @app.exception_handler(500)
 async def internal_error_handler(request, exc):
     logger.error(f"Internal server error: {exc}")
-    return JSONResponse(
-        status_code=500,
-        content={"detail": "Internal server error"}
-    )
+    return JSONResponse(status_code=500, content={"detail": "Internal server error"})
+
 
 # Startup and shutdown events
 @app.on_event("startup")
@@ -819,16 +1169,13 @@ async def startup_event():
     logger.info(f"Frontend URL: {FRONTEND_URL}")
     logger.info(f"OAuth Redirect URL: {OAUTH_REDIRECT_URL}")
 
+
 @app.on_event("shutdown")
 async def shutdown_event():
     logger.info("Jeet Enterprises API shutting down")
 
+
 if __name__ == "__main__":
     import uvicorn
-    uvicorn.run(
-        app, 
-        host="0.0.0.0", 
-        port=8000, 
-        reload=True,
-        log_level="info"
-    )
+
+    uvicorn.run(app, host="0.0.0.0", port=8000, reload=True, log_level="info")
